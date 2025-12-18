@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+
+# Local data / databases / logs
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/blocked_ips.txt
+*.log
+
+# OS / editor
+.DS_Store
+.vscode/
