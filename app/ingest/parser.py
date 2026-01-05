@@ -1,9 +1,9 @@
+import hashlib
 import re
 from datetime import datetime, timezone
 
-#here, we are parsing the ssh failed password log lines with regex
-#example log:
-#Dec 29 12:00:00,789 - INFO - [ssh] ssh_failed_password - 203.0.113.10 - root - failed - Failed password for root from 203.0.113.10 port 5555 ssh2
+# Example log format:
+# Dec 29 12:00:00 server sshd[123]: Failed password for root from 203.0.113.10 port 5555 ssh2
 
 SSH_FAILED_RE = re.compile(
     r'^(?P<month>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+(?P<time>\d{2}:\d{2}:\d{2}).*'
@@ -16,11 +16,18 @@ MONTHS = {
     "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12
 }
 
+# -------------------------
+# Parse: SSH auth.log lines
+# -------------------------
 def parse_ssh_line(line: str):
+    """
+    Parse SSH failed password log line into normalized event dict.
+    Returns None if line doesn't match expected format.
+    """
     match = SSH_FAILED_RE.match(line)
     if not match:
         return None
-        
+
     month_int = MONTHS.get(match.group("month").upper())
     if month_int is None:
         return None
@@ -38,6 +45,13 @@ def parse_ssh_line(line: str):
         tzinfo=timezone.utc,
     )
 
+    # Stable deduplication fingerprint
+    fp_src = (
+        f"{ts.isoformat()}|ssh|ssh_failed_password|"
+        f"{match.group('ip')}|{match.group('user')}|failed|{line.strip()}"
+    )
+    fingerprint = hashlib.sha256(fp_src.encode("utf-8")).hexdigest()
+
     return {
         "ts": ts,
         "source": "ssh",
@@ -46,4 +60,5 @@ def parse_ssh_line(line: str):
         "username": match.group("user"),
         "status": "failed",
         "raw": line.strip(),
+        "fingerprint": fingerprint,
     }
