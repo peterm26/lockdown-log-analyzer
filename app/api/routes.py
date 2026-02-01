@@ -1,14 +1,20 @@
-from pathlib import Path
 from typing import Optional
+from pathlib import Path
+import hashlib
+from datetime import datetime, timezone
 
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.detection.detectors import detect_ssh_bruteforce
 from app.db.database import get_db
 from app.db.models import Event
-from app.detection.detectors import detect_ssh_bruteforce
 from app.ingest.parser import parse_ssh_line
+
+from app.analytics.ssh import ssh_summary
+
+from app.analytics.kpis import ssh_business_kpis
 
 router = APIRouter()
 
@@ -25,24 +31,40 @@ def root():
 # Dev helper: insert one event
 # -------------------------
 @router.post("/test-event")
-def create_test_event(db: Session = Depends(get_db)):
+def create_test_event(
+    db: Session = Depends(get_db),
+    repeat: bool = Query(False),
+):
     try:
+        raw_line = "Failed password for root from 203.0.113.10 port 5555 ssh2"
+        ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc) if repeat else datetime.now(timezone.utc)
+
+        fp_src = (
+            f"{ts.isoformat()}|ssh|ssh_failed_password|"
+            f"203.0.113.10|root|failed|{raw_line.strip()}"
+        )
+        fingerprint = hashlib.sha256(fp_src.encode("utf-8")).hexdigest()
+
         e = Event(
+            ts=ts,
             source="ssh",
             event_type="ssh_failed_password",
             ip="203.0.113.10",
             username="root",
             status="failed",
-            raw="Failed password for root from 203.0.113.10 port 5555 ssh2",
+            raw=raw_line,
+            fingerprint=fingerprint,
         )
         db.add(e)
         db.commit()
         db.refresh(e)
-        return {"inserted_id": e.id}
+        return {"inserted_id": e.id, "repeat": repeat}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Duplicate test event (fingerprint already exists)")
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=503, detail=f"Database error: {str(e)}")
-
 
 # -------------------------
 # List events
@@ -77,16 +99,25 @@ def ingest_ssh_logs(
     filename: str = "auth.log",
     max_lines: Optional[int] = Query(None, ge=1, le=200000),
 ):
-    """
-    Reads data/<filename>, parses SSH failed-password lines,
-    inserts normalized Event rows.
-    """
-    log_path = Path(__file__).resolve().parents[2] / "data" / filename
+    # Security: Prevent path traversal attacks
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    data_dir = Path(__file__).resolve().parents[2] / "data"
+    log_path = data_dir / filename
+    
+    # Ensure the resolved path is still within data directory
+    try:
+        log_path.resolve().relative_to(data_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
     if not log_path.exists():
         raise HTTPException(status_code=404, detail=f"{filename} not found in data/")
 
     inserted = 0
     skipped = 0
+    duplicates = 0
 
     try:
         with log_path.open("r", errors="ignore") as f:
@@ -99,10 +130,16 @@ def ingest_ssh_logs(
                     skipped += 1
                     continue
 
-                db.add(Event(**parsed))
-                inserted += 1
+                try:
+                    db.add(Event(**parsed))
+                    db.flush()  # forces UNIQUE fingerprint check now
+                    inserted += 1
+                except IntegrityError:
+                    db.rollback()  # clears failed insert state
+                    duplicates += 1
 
         db.commit()
+
     except SQLAlchemyError as e:
         db.rollback()
         raise HTTPException(status_code=503, detail=f"Database error: {str(e)}")
@@ -112,12 +149,11 @@ def ingest_ssh_logs(
 
     return {
         "inserted": inserted,
+        "duplicates": duplicates,
         "skipped": skipped,
         "file": str(log_path.name),
         "source": "ssh",
     }
-
-
 # -------------------------
 # Detection: SSH brute force
 # -------------------------
@@ -133,3 +169,24 @@ def list_ssh_bruteforce_alerts(
         window_minutes=window_minutes,
     )
     return {"detections": detections, "count": len(detections)}
+
+# -------------------------
+# Analytics: SSH summary
+# -------------------------
+@router.get("/analytics/ssh-summary")
+def analytics_ssh_summary(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+    top_n: int = Query(10, ge=1, le=50),
+):
+    return ssh_summary(db, window_hours=window_hours, top_n=top_n)
+
+# -------------------------
+# Analytics: SSH business KPIs
+# -------------------------
+@router.get("/analytics/ssh-kpis")
+def analytics_ssh_kpis(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+):
+    return ssh_business_kpis(db, window_hours=window_hours)
