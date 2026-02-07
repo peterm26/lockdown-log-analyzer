@@ -16,6 +16,8 @@ from app.analytics.ssh import ssh_summary
 
 from app.analytics.kpis import ssh_business_kpis
 
+from app.analytics.trends import ssh_trends
+
 router = APIRouter()
 
 
@@ -190,3 +192,13 @@ def analytics_ssh_kpis(
     window_hours: int = Query(24, ge=1, le=168),
 ):
     return ssh_business_kpis(db, window_hours=window_hours)
+
+# -------------------------
+# Analytics: SSH trends
+# -------------------------
+@router.get("/analytics/ssh-trends")
+def analytics_ssh_trends(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+):
+    return ssh_trends(db, window_hours=window_hours)
