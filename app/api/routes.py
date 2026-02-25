@@ -18,6 +18,10 @@ from app.analytics.kpis import ssh_business_kpis
 
 from app.analytics.trends import ssh_trends
 
+from app.analytics.ssh_exec_summary import ssh_exec_summary
+
+from app.analytics.top_attackers import top_attackers
+
 router = APIRouter()
 
 
@@ -35,15 +39,16 @@ def root():
 @router.post("/test-event")
 def create_test_event(
     db: Session = Depends(get_db),
+    ip: str = Query("203.0.113.10"),
     repeat: bool = Query(False),
 ):
     try:
-        raw_line = "Failed password for root from 203.0.113.10 port 5555 ssh2"
+        raw_line = f"Failed password for root from {ip} port 5555 ssh2"
         ts = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc) if repeat else datetime.now(timezone.utc)
 
         fp_src = (
             f"{ts.isoformat()}|ssh|ssh_failed_password|"
-            f"203.0.113.10|root|failed|{raw_line.strip()}"
+            f"{ip}|root|failed|{raw_line.strip()}"
         )
         fingerprint = hashlib.sha256(fp_src.encode("utf-8")).hexdigest()
 
@@ -51,7 +56,7 @@ def create_test_event(
             ts=ts,
             source="ssh",
             event_type="ssh_failed_password",
-            ip="203.0.113.10",
+            ip=ip,
             username="root",
             status="failed",
             raw=raw_line,
@@ -202,3 +207,24 @@ def analytics_ssh_trends(
     window_hours: int = Query(24, ge=1, le=168),
 ):
     return ssh_trends(db, window_hours=window_hours)
+
+# -------------------------
+# Analytics: SSH executive summary
+# -------------------------
+@router.get("/report/ssh-exec-summary")
+def report_ssh_exec_summary(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+):
+    return ssh_exec_summary(db, window_hours=window_hours)
+
+# -------------------------
+# Analytics: Top attackers
+# -------------------------
+@router.get("/analytics/top-attackers")
+def analytics_top_attackers(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(5, ge=1, le=50),
+):
+    return top_attackers(db, window_hours=window_hours, limit=limit)
