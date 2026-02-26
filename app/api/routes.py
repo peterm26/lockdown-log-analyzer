@@ -22,6 +22,8 @@ from app.analytics.ssh_exec_summary import ssh_exec_summary
 
 from app.analytics.top_attackers import top_attackers
 
+from app.analytics.timeline import ssh_timeline
+
 router = APIRouter()
 
 
@@ -228,3 +230,14 @@ def analytics_top_attackers(
     limit: int = Query(5, ge=1, le=50),
 ):
     return top_attackers(db, window_hours=window_hours, limit=limit)
+
+# -------------------------
+# Analytics: SSH attack timeline
+# -------------------------
+@router.get("/analytics/ssh-timeline")
+def analytics_ssh_timeline(
+    db: Session = Depends(get_db),
+    window_hours: int = Query(24, ge=1, le=168),
+    bucket_minutes: int = (Query(60, ge=5, le=60)),
+):
+    return ssh_timeline(db, window_hours=window_hours, bucket_minutes=bucket_minutes)
